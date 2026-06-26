@@ -1,8 +1,15 @@
 #!/bin/bash
 
-SERVER="YOUR_FTP_SERVER"
-USER="YOUR_USERNAME"
-FILENAME="YOUR_FILENAME"
+if [ $# -lt 2 ]; then
+  echo "Usage: $0 <user@server> <remote_file> [local_dest]"
+  exit 1
+fi
+
+USER_HOST=$1
+REMOTE_FILE=$2
+LOCAL_FILE=${3:-$(basename "$REMOTE_FILE")}
+USER=${USER_HOST%@*}
+SERVER=${USER_HOST#*@}
 MAX_TRY=10
 TRY=1
 
@@ -12,21 +19,13 @@ echo
 # Function to run an SFTP command using expect
 sftp_expect() {
   local CMD=$1
-  expect << EOF
+  SFTP_PASS="$PASS" SFTP_USER="$USER" SFTP_SERVER="$SERVER" SFTP_CMD="$CMD" expect << 'EOF'
     set timeout 600
-    spawn sftp $USER@$SERVER
-    expect {
-      "Are you sure you want to continue connecting (yes/no)?" {
-        send "yes\r"
-        expect "password:"
-        send "$PASS\r"
-      }
-      "password:" {
-        send "$PASS\r"
-      }
-    }
+    spawn sftp -o StrictHostKeyChecking=accept-new $env(SFTP_USER)@$env(SFTP_SERVER)
+    expect "password:"
+    send "$env(SFTP_PASS)\r"
     expect "sftp>"
-    send "$CMD\r"
+    send "$env(SFTP_CMD)\r"
     expect "sftp>"
     send "bye\r"
     expect eof
@@ -34,9 +33,10 @@ EOF
 }
 
 # Get remote file size
-REMOTE_LS=$(sftp_expect "ls -l")
+echo "🔌 Connecting to $SERVER..."
+REMOTE_LS=$(sftp_expect "ls -l $REMOTE_FILE")
 
-REMOTE_SIZE=$(echo "$REMOTE_LS" | grep "$FILENAME" | sed -E 's/.*[[:space:]]([0-9]+)[[:space:]]+[A-Za-z]+[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9]{2}:[0-9]{2}[[:space:]]+.*$/\1/')
+REMOTE_SIZE=$(echo "$REMOTE_LS" | grep -E "^[-d]" | sed -E 's/.*[[:space:]]([0-9]+)[[:space:]]+[A-Za-z]+[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9]{2}:[0-9]{2}[[:space:]]+.*$/\1/')
 
 if [[ ! "$REMOTE_SIZE" =~ ^[0-9]+$ ]]; then
   echo "❌ Failed to retrieve remote file size!"
@@ -50,8 +50,8 @@ echo "📦 Remote file size: $REMOTE_SIZE bytes"
 # Retry download up to MAX_TRY times
 while [ $TRY -le $MAX_TRY ]; do
   LOCAL_SIZE=0
-  if [ -f "$FILENAME" ]; then
-    LOCAL_SIZE=$(stat -f%z "$FILENAME")   # macOS-specific: stat -f%z
+  if [ -f "$LOCAL_FILE" ]; then
+    LOCAL_SIZE=$(stat -f%z "$LOCAL_FILE" 2>/dev/null || stat -c%s "$LOCAL_FILE")
   fi
   echo "💾 Local file size: $LOCAL_SIZE bytes"
 
@@ -60,8 +60,9 @@ while [ $TRY -le $MAX_TRY ]; do
     break
   fi
 
-  echo "🔄 Resuming download (${TRY}/${MAX_TRY})..."
-  sftp_expect "reget $FILENAME"
+  PCT=$(( LOCAL_SIZE * 100 / REMOTE_SIZE ))
+  echo "🔄 Resuming download (${TRY}/${MAX_TRY}) — ${PCT}% complete..."
+  sftp_expect "reget $REMOTE_FILE $LOCAL_FILE"
 
   ((TRY++))
   sleep 2
