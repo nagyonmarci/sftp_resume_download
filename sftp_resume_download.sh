@@ -36,7 +36,7 @@ EOF
 echo "🔌 Connecting to $SERVER..."
 REMOTE_LS=$(sftp_expect "ls -l $REMOTE_FILE")
 
-REMOTE_SIZE=$(echo "$REMOTE_LS" | grep -E "^[-d]" | sed -E 's/.*[[:space:]]([0-9]+)[[:space:]]+[A-Za-z]+[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9]{2}:[0-9]{2}[[:space:]]+.*$/\1/')
+REMOTE_SIZE=$(echo "$REMOTE_LS" | awk '/^[-d]/{print $5}')
 
 if [[ ! "$REMOTE_SIZE" =~ ^[0-9]+$ ]]; then
   echo "❌ Failed to retrieve remote file size!"
